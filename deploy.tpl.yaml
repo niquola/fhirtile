@@ -1,0 +1,45 @@
+
+# Aidbox Production (aka stable)
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: aidbox-crm
+  namespace: {{CLUSTER}}
+type: Opaque
+data:
+  MAILCHIMP_KEY: OWQ5OTg3MzdjN2UxNDVhOTQ5NGI3NjA5YzBlMDY2ZWYtdXMxOQ==
+  CLIENT_SECRET: bmVzb2xvbm9obGViYXZzaGk=
+
+
+---
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: aidbox-crm
+  namespace: {{CLUSTER}}
+  labels:
+    app: aidbox-crm
+spec:
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: aidbox-crm 
+    spec:
+      containers:
+      - name: aidbox-crm 
+        image: {{APP_IMAGE}}
+        imagePullPolicy: Always
+        env:
+        - name: BASE_URL
+          value: "https://aidbox.app"
+        - name: BUILT_AT
+          value: "{{BUILT_AT}}"
+        - name: CLIENT_ID
+          value: crm
+        - name: POLL_TIMEOUT
+          value: "300"
+        envFrom:
+        - secretRef:
+            name: aidbox-crm

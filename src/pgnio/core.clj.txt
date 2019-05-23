@@ -1,0 +1,105 @@
+(ns pgnio.core
+  (:require [cheshire.core :as json])
+  (:import pgnio.Config
+           pgnio.ConnectionIo
+           pgnio.QueryBuildConnection
+           pgnio.QueryMessage
+           pgnio.Connection))
+
+
+(set! *warn-on-reflection* true)
+
+(def cfg (doto (pgnio.Config.)
+           (.hostname "localhost")
+           (.username "postgres")
+           (.password "postgres")
+           (.port 5436)))
+
+(defn build-parser [cols]
+  (let [row 'row
+        raw 'raw
+        m (reduce (fn [acc [k {i :index :as col}]]
+                    (assoc acc k (list 'decode col '(nth raw i)))) {} cols)]
+    `(fn [~row]
+       (let [^bytes ~raw (.raw ~row)]
+         ~m))))
+
+;; (build-parser {:a {:index 0} :b {:index 1}})
+
+(defn columns [^pgnio.QueryMessage$Row r]
+  (->> (.columns ^pgnio.QueryMessage$RowMeta (.meta ^pgnio.QueryMessage$Row r))
+       (reduce 
+        (fn [acc ^pgnio.QueryMessage$RowMeta$Column c]
+          (let [nm (keyword (.name c))]
+            (assoc acc nm
+                   {:index (.index c)
+                    :oid (.tableOid c)
+                    :column-attr-number (.columnAttributeNumber c)
+                    :dt-oid (.dataTypeOid c)
+                    :dt-size (.dataTypeSize c)
+                    :dt-mod (.typeModifier c)
+                    :text? (.textFormat c)
+                    :array (.arrayParent c)}))
+          ) {})))
+
+(defmulti decode (fn [{dt-oid :dt-oid} ^bytes s] dt-oid))
+
+;; jsonb
+(defmethod decode
+  3802
+  [oid ^bytes s]
+  (when s
+    (json/parse-string (String. s) keyword)))
+
+(defmethod decode :default
+  [oid ^bytes s]
+  (String. s))
+
+(defn parse-rows [rows]
+  (when-let [r (first rows)]
+    (let [cols (columns r)
+          parser (fn [^pgnio.QueryMessage$Row r]
+                   (let [^bytes raw (.raw r)]
+                     (->> cols
+                          (reduce
+                           (fn [acc [nm col]]
+                             (if-let [bs (nth raw (:index col))]
+                               (assoc! acc nm (decode col bs))
+                               acc)
+                             ) (transient {}))
+                          (persistent!))))]
+      (mapv parser rows))))
+
+(defn query [^pgnio.QueryReadyConnection conn ^String query]
+  (-> (.simpleQueryRows  conn query)
+      deref
+      parse-rows))
+
+(defn connection [^pgnio.Config cfg]
+  (let [^pgnio.Connection$Startup i @(pgnio.Connection/init cfg)
+        ^pgnio.QueryReadyConnection c @(.auth i)]
+    c))
+
+(defn close [conn]
+  @(.terminate ^pgnio.Connection conn))
+
+
+(comment
+
+  (def db (connection cfg))
+
+  (close db)
+  db
+
+  (time
+   (count (query db "select * from information_schema.tables")))
+
+  (query db "select * from \"user\" ")
+
+  (def tps (query db "select oid, * from pg_catalog.pg_type "))
+
+  (def state (start))
+
+  (stop state)
+
+  )
