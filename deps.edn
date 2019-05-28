@@ -4,10 +4,12 @@
  :deps {org.clojure/clojure               {:mvn/version "1.10.0"}
         org.martinklepsch/clj-http-lite   {:mvn/version "0.4.1"}
         cheshire                          {:mvn/version "5.6.3"}
-
+        clj-commons/clj-yaml           {:mvn/version "0.7.0"}
         com.sun.xml.bind/jaxb-core     {:mvn/version "2.3.0.1"}
         com.sun.xml.bind/jaxb-impl     {:mvn/version "2.3.2"}
-        javax.xml.bind/jaxb-api        {:mvn/version "2.4.0-b180830.0359"}}
+        javax.xml.bind/jaxb-api        {:mvn/version "2.4.0-b180830.0359"}
+        healthsamurai/matcho           {:mvn/version "RELEASE"}
+        }
 
  :aliases {:nrepl
            {:extra-paths ["dev"]

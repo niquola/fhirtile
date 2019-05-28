@@ -1,240 +1,391 @@
 (ns core
   (:require [clj-http.lite.client :as http]
             [cheshire.core :as json]
-            [clojure.string :as str])
+            [clojure.string :as str]
+            [clj-yaml.core :as yaml]
+            [matcho.core :refer :all :as matcho])
   (:import [java.util.concurrent Executors TimeUnit ScheduledThreadPoolExecutor])
   (:gen-class))
 
 (set! *warn-on-reflection* true)
 
-(defn do-get [ctx path & [params]]
-  (let [res (http/request
-             {:url (str (:base-url ctx) path)
-              :method :get
-              :throw-exceptions false
-              :basic-auth [(:client-id ctx) (:client-secret ctx)]
-              :query-params (merge {:_format "json"} (or params {}))})]
-    {:status (:status res)
-     :body (json/parse-string (:body res) keyword)}))
+(do
 
-(defn do-patch [ctx path body]
-  (let [res (http/request
-             {:url (str (:base-url ctx) path)
-              :method :post
-              :throw-exceptions false
-              :headers {"x-http-method-override" "patch"
-                        "content-type" "application/json"}
-              :basic-auth [(:client-id ctx) (:client-secret ctx)]
-              ;; :query-params {:_method "merge-patch"}
-              :body (json/generate-string body)})]
-    {:status (:status res)
-     :body (json/parse-string (:body res) keyword)}))
+(defn => [x & fns]
+  (loop [acc {}
+         x x
+         [f & fs] fns]
+    (if (map? f)
 
-(defn do-post [ctx path body]
-  (let [res (http/request
-             {:url (str (:base-url ctx) path)
-              :method :post
-              :throw-exceptions false
-              :headers {"content-type" "application/json"}
-              :basic-auth [(:client-id ctx) (:client-secret ctx)]
-              ;; :query-params {:_method "merge-patch"}
-              :body (json/generate-string body)})]
-    {:status (:status res)
-     :body (json/parse-string (:body res) keyword)}))
+      (let [acc (map-assoc (fn [k] ((get f k) x)) acc (keys f))]
+        (if (empty? fs) (merge {:_result x} acc) (recur acc (:_result acc x) fs)))
 
-(defn do-put [ctx path body]
-  (let [res (http/request
-             {:url (str (:base-url ctx) path)
-              :method :put
-              :throw-exceptions false
-              :headers {"content-type" "application/json"}
-              :basic-auth [(:client-id ctx) (:client-secret ctx)]
-              :body (json/generate-string body)})]
-    {:status (:status res)
-     :body (json/parse-string (:body res) keyword)}))
+      (let [r (f x)
+            acc' (merge acc {:_result r})]
+         (if (empty? fs) acc' (recur acc' r fs)))
 
+      )))
 
-(defn telegram-notify [ctx u]
-  (let [link (str "https://aidbox.app/static/console.html#/entities/User/" (:id u))
-        title (->>
-               [(:userName u)
-                (:email u)
-                (get-in u [:name :formatted])]
-               (filterv identity)
-               (str/join "; "))
+(defn =>> [x & fns]
+  (loop [acc (if (map? x) x (:_result x))
+         x x
+         [f & fs] fns]
+    (if (map? f)
 
-        photo (if-let [p (:photo u)]
-                (str "\n" p) "")
+      (let [acc (map-assoc (fn [k] ((get f k) x)) acc (keys f))]
+        (if (empty? fs) (merge {:_result x} acc) (recur acc (:_result acc x) fs)))
 
-        msg (str "New user: "
-                 "txid(" (get-in u [:meta :versionId]) ") "
-                 "[" title "](" link ")"
-                 photo)]
-    (http/request
-     {:url "https://api.telegram.org/bot653513017:AAFMeJogI-0LfFRE082f-bOCPtNGyRwmc-g/sendMessage"
-      :method :get
-      :headers {"content-type" "application/json"}
-      :throw-exceptions false
-      :body (json/generate-string
-             {:chat_id "-270652015"
-              :text msg
-              :disable_notification true})})))
+      (let [r (f x)
+            acc' (merge acc {:_result r})]
+        (if (empty? fs) acc' (recur acc' r fs)))
 
-;; "{:email_address 'niquola@health-samurai.io'
-;;     :status 'subscribed'
-;;     :merge_fields {:FNAME 'Nikolai'
-;;                    :LNAME 'Ryzhikov'}}"
-(defn mailchimp-subscribe [ctx u]
-  (if-let [secret (ctx :mailchimp-key)]
-    (when-let [email (:email u)]
-      (let [nm (or (get-in u [:name :formatted]) (:userName u))
-            [f l] (str/split nm #"\s+" 2)
-            f (or (get-in u [:name :givenName]) f)
-            l (or (get-in u [:name :familyName]) l)
-            msg {:email_address email
-                 :status "subscribed"
-                 :merge_fields (cond-> {}
-                                 f (assoc :FNAME f)
-                                 l (assoc :LNAME l))}]
-        (println "Send to mailchimp: " msg)
-        (println 
-         (select-keys
-          (http/request
-           {:url "https://us19.api.mailchimp.com/3.0/lists/7fa57cfd06/members"
-            :method :post
-            :throw-exceptions false
-            :basic-auth ["HealthSamurai" secret]
-            :body (json/generate-string msg)})
-          [:status :body]))))
-    (println "Mailchimp is not configured. Please provide MAILCHIMP_KEY")))
+      )))
 
-(defn users [ctx txid]
-  (:body (do-get ctx "/User/_history" (cond-> {:_format "json"}
-                           txid (assoc :_txid txid)))))
-
-(def watch-url "/CrmWatch/new-users")
-
-(defn config [ctx ]
-  (:body (do-get ctx watch-url)))
-
-(defn update-config [ctx cfg]
-  (:body (do-patch ctx watch-url cfg)))
-
-(defn log-new-user  [r]
-  (println (str "NEW USER: txid(" (get-in r [:meta :versionId]) ") "
-                (->>
-                 [(:userName r)
-                  (:email r)
-                  (get-in r [:name :formatted])]
-                 (filterv identity)
-                 (str/join "; ")))))
-
-(defn do-job [ctx]
+(defn symbol-str [s]
   (try
-    (let [cfg (config ctx)
-          txid (or (:last_txid cfg) 0)
-          users (users ctx txid)]
-      (when (:debug cfg)
-        (print "Get users from " txid))
-      (if (and (empty? (:entry users)) (:debug cfg))
-        (println " .")
-        (println (.toString (java.time.LocalDateTime/now)) " "  (count (:entry users))))
-      (doseq [{r :resource req :request} (:entry users)]
-        (when (= "POST" (:method req))
-          (log-new-user r)
-          (telegram-notify ctx r)
-          (mailchimp-subscribe ctx r)))
-      (when-let [new-txid (let [new-txid (:id users)] (when (not (= (str txid) (str new-txid))) new-txid))]
-        (println "Update last_txid = " new-txid)
-        (println (update-config ctx {:last_txid (Integer/parseInt ^String new-txid)}))))
-    (catch Exception e
-      (println "ERROR:" e))))
-
-(defn stop [{ex :executor}]
-  (when ex
-    (println "Stopping..." )
-    (.shutdown ^ScheduledThreadPoolExecutor ex)))
-
-(defn init [ctx]
-  (let [resp (do-post ctx "/App"
-                      {:resourceType "App"
-                       :id "crm"
-                       :apiVersion 1
-                       :type "app"
-                       :entities {:CrmWatch {:attrs {:last_txid {:type "integer"}}}}})]
-    (when (> (:status resp) 299)
-      (throw (Exception. (pr-str resp)))))
-
-  (let [cfg-resp (do-get ctx watch-url)]
-    (if (= 404 (:status cfg-resp))
-      (let [resp (do-put ctx watch-url {:last_txid 10000})]
-        (when (> (:status resp) 299)
-          (throw (Exception. (pr-str resp))))
-        resp)
-      cfg-resp)))
-
-(defn validate-ctx [ctx]
-  (assert (:base-url ctx) "BASE_URL is required")
-  (assert (:client-id ctx) "CLIENT_ID is required")
-  (assert (:client-secret ctx) "CLIENT_SECRET is required")
-  (assert (:mailchimp-key ctx) "MAILCHIMP_KEY is required"))
-
-(defn start [ctx]
-  (validate-ctx ctx)
-  (println "Start with " (:base-url ctx) " timeout " (:timeout ctx))
-  (init ctx)
-  (let [executor (Executors/newScheduledThreadPool 1)
-        fut (.scheduleAtFixedRate executor #(do-job ctx) 0 (or (:timeout ctx) 30) TimeUnit/SECONDS)]
-    {:executor executor :future fut}))
-
-(defn -main [& [args]]
-  (let [ctx {:base-url      (System/getenv "BASE_URL")
-             :client-id     (System/getenv "CLIENT_ID")
-             :timeout       (Integer/parseInt (or (System/getenv "POLL_TIMEOUT") "30"))
-             :client-secret (System/getenv "CLIENT_SECRET")
-             :mailchimp-key (System/getenv "MAILCHIMP_KEY")}]
-    (validate-ctx ctx)
-    (println "Start with " (:base-url ctx) " timeout " (:timeout ctx))
-    (init ctx)
-    (loop []
-      (do-job ctx)
-      (Thread/sleep (* 1000 (:timeout ctx)))
-      (recur))))
-
-(comment
-  (def ctx
-    {:base-url "https://aidbox.app"
-     :client-id "crm"
-     :debug true
-     :timeout 5
-     :mailchimp-key "9d998737c7e145a9494b7609c0e066ef-us19"
-     :client-secret "nesolonohlebavshi"})
-
-  (validate-ctx ctx)
-
-  (do-put ctx watch-url {:last_txid 2500})
-
-  (init ctx)
-
-  (def state
-    (start ctx))
-
-  (stop state)
-
-  (config ctx)
-
-  (do-job ctx)
-
-  (def u (:body (do-get ctx "/User/cac2e7a2-a7bb-44de-9a09-508b8d3692ef")))
-
-  (telegram-notify ctx u)
-
-  (:name u)
-
-  (update-config ctx {:last_txid 2939})
-
-  (mailchimp-subscribe ctx u)
-
-  (update-config ctx {:last_txid 2489})
-
+  (let [r (symbol s)]
+     r
+     )
+  (catch Exception _
+      (str s)))
   )
+
+(defmacro >>=
+  ([k f] {k f :_result f})
+  ([f] {(keyword (symbol-str f)) f :_result f})
+  )
+
+(defmacro >>
+  ([k f] {k f})
+  ([f] {(keyword (symbol-str f)) f})
+  )
+) ;; end of combinators definitions
+
+(=>> (=>> (=>> 5 (>> sqr) (>>= sqr) (>>= (partial - 6)))
+          :sqr (>> :sqr2 sqr) (partial - 7))
+     :sqr2)
+
+( do
+;; yaml dummy tests
+(= (yaml/generate-string
+ [{:name "John Smith", :age 33}
+  {:name "Mary Smith", :age 27}])
+"- {name: John Smith, age: 33}\n- {name: Mary Smith, age: 27}\n"
+)
+
+;; check if we write the same keyword with different value
+(= (yaml/parse-string "
+- {name: John Smith, age: 33}
+- name: Mary Smith
+  age: 27
+  age: 28
+") [{:name "John Smith", :age 33}
+    {:name "Mary Smith", :age 28}])
+;; the last wins
+
+
+;; no keywordize
+(yaml/parse-string "
+- {name: John Smith}
+"  :keywords false)
+)
+
+(do 
+;; define the match testing function
+(defn load-matching-test [s]
+  (let [res (apply (:command s) (:args s))
+        proc (:process s identity)
+        res' (proc res)]
+     (map (fn [r] (matcho/match res' r)) (:asserts-match s))
+     )
+  )
+
+(matcho/match {:bar {:foo "Bar" :baz "Baz"}} {:bar {:foo "Bar"}})
+
+(defn print-matching-test [s]
+  (let [res (apply (:command s) (:args s))
+        proc (:process s identity)
+        res' (proc res)]
+    (map (fn [r] (println res' "; " r)) (:asserts-match s))
+    )
+  )
+
+) ;; end of testing functions definitions
+
+(do
+
+;; just to get know it is alive
+(defn sqr [x] (* x x))
+(= 25 (sqr 5))
+
+(load-matching-test {:command sqr
+                     :args [5]
+                     :process sqr
+                     :asserts-match [625 number?]})
+)
+
+
+;; prepare empty environment
+
+;; clear current database
+
+(do
+
+(defn get-entry' [resp]
+  (=> resp
+       :body
+       #(json/parse-string % true)
+       #(:entry % (identity %))
+       )
+  )
+
+(defn get-entry [resp]
+  (:_result (get-entry' resp))
+  )
+
+(defn get-entries [url]
+  (get-entry (http/get url))
+  )
+
+(defn clear-entries [entries]
+    (do
+      (doseq [ent entries] (http/delete (:fullUrl ent)))
+      (count entries))
+  )
+
+(defn clear-entries-url [url]
+  (clear-entries (get-entries url))
+  )
+
+);; end of get/clear definitions
+
+(loop [n 1000]
+  (if (> n 0)
+    (do
+     (->> test-spec1 (insert-data))
+     (recur (- n 1)))
+    true
+ ))
+
+(=> (get-entries "http://localhost:8765/Patient?_count=10000") count)
+
+
+(#_comment do
+
+  (get-entries "http://localhost:8765/Patient?_count=10000")
+
+  (clear-entries-url  "http://localhost:8765/Patient/")
+
+  (load-matching-test {:command get-entries
+                       :args ["http://localhost:8765/Patient/"]
+                       :asserts-match [empty?]})
+  )
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+;; parse yaml spec
+
+;; should be read from file
+
+(do
+
+(def test1
+"id: simple
+desc: Basic one parameter searches
+fhir: \"4.0.0\"
+base-url: \"http://localhost:8765/\"
+
+data:
+    Patient:
+      pt-1:
+        name: [{family: 'Doe'}]
+      pt-2:
+        name: [{family: 'John'}]
+      pt-3:
+        name: [{family: 'Ivan'}]
+
+cases:
+  count-correct:
+    method: get
+    url: \"Patient\"
+    asserts:
+      as-1:
+         - _result: '#(= (count %) 3)'
+         - _result: '#(= (empty? %) false)'
+      as-2:
+         - _result: '#(> (count %) 2)'
+         - _result: '#(< (count %) 4)'
+  names-correct:
+    method: get
+    url: \"Patient\"
+    id: $pt-1
+    asserts:
+      as-5:
+       - _result: '#(= (map? %) true)'
+       - _result:
+             name: [{family: 'Doe'}]
+      as-7:
+       _result:
+          name: '#(= (count %) 1)'
+      as-8:
+       _result:
+          name:
+             - family: 'Doe'
+      as-9:
+       _result:
+          name:
+             - family: '#(string? %)'")
+
+
+(def test-spec1 (yaml/parse-string test1 :keywords true))
+
+)
+
+(->> (=>> (=> test-spec1 :cases :count-correct :asserts :as-1) :_result get-matcher) :_result)
+
+;; assoc with list
+;; map-assoc f {} [:a :b :c] =  {:a (f :a) :b (f :b) :c (f :c)}
+(defn map-assoc [f val coll]
+  (reduce (fn [m k] (assoc m k (f k))) val coll)
+  )
+
+;; prepare modeling environment, insert data
+
+(do
+
+(defn insert-data [spec]
+  (let [dt (:data spec)
+        burl (:base-url spec)]
+    (map-assoc (fn [t] 
+     (let [entries (get dt t)] ;; entries of this type
+       (map-assoc (fn [eid]
+         (let [bdstr (json/generate-string (merge {:resourceType t} (get entries eid)))]
+           #_(println (str burl "/" (name t)))
+           #_(println bdstr)
+           (http/post (str burl "/" (name t)) {:headers {"Content-Type" "application/json; charset=utf-8"}
+                                               :body bdstr})
+           )) {} (keys entries)))) {} (keys dt))
+     )
+    )
+
+;; run cases
+
+(defn getCtxKey [ctx ks d]
+   (loop [c ctx
+          [kx & kss] ks]
+     (let [newc (get c kx)]
+       (if (nil? newc) d (if (empty? kss) newc (recur newc kss)))
+       )
+     )
+  )
+
+;; (defn get-string-function [k s]
+;;   (let [[f & r] (str/split (str/trim (subs (str/trim s) 1)) #"\s+")]
+;;      (load-string (format "(fn [res] (%s (get res :%s) %s))" f (name k) (str/join " " r)))
+;;      )
+;;   )
+
+;; (get-string-function :foo "#  > 0")
+
+(defn get-matcher [m]
+  (if (map? m)
+    (map-assoc (fn [k] (get-matcher (get m k))) {} (keys m))
+    (if (string? m)
+      (if (str/starts-with? m "#") (load-string m) m)
+      (if (sequential? m)
+        (mapv get-matcher m)
+        m
+        )
+      ))
+  )
+
+(get-matcher  {:foo {:bar "#(> % 0)"}})
+
+(flatten [1 2 3])
+
+(defn run-cases [spec ctx]
+  (let [cases (:cases spec)
+        burl (:base-url spec)]
+    (map-assoc (fn [casekey] 
+         (let [case (get cases casekey)
+               method (:method case)
+               url (:url case)
+               ass (:asserts case)
+               caseid (:id case "")
+               caseid' (if (str/starts-with? caseid "$")
+                         (->> (=> ctx (keyword url) (keyword (subs caseid 1)) :body #(json/parse-string % true) :id) :_result)
+                         caseid)]
+           ;;(println "id: " caseid')
+           (map-assoc (fn [k] (let [a (get ass k)]
+                           (load-matching-test {:command (resolve (symbol (str "http/" method)))
+                                                :args [(str burl "/" url "/" (str caseid'))]
+                                                :process get-entry'
+                                                :asserts-match (flatten [(get-matcher a)])})))
+                                                   {} (keys ass)))) {} (keys cases))
+    ))
+
+);; end of insert-run definitions
+
+;; (let [c (get a ka)
+;;                                                                                    b (string? c)
+;;                                                                                    c' (if b (str/split c #"\s+") c)
+;;                                                                                    b' (if b (empty? (rest c')) true)]
+;;                                                                                (if (or (not b) b')
+;;                                                                                  #_(assoc {} ka (map-assoc (partial get c) {} (keys c)))
+;;                                                                                  (assoc {} ka c)
+;;                                                                                  (load-string (format "(fn [res] (%s (%s res) %s))"
+;;                                                                                                    (first c')
+;;                                                                                                    (name ka)
+;;                                                                                                    (str/join " " (rest c'))))))
+
+(matcho/match {:foo [{:bar "Bar"}, {:baz "Baz"}]} {:foo [{:bar "Bar"}]})
+(run-cases test-spec1 insdata)
+
+;; (defn func-bind [x & fns]
+;;   (loop [acc {}
+;;          x x
+;;          [f & fs] fns]
+;;     (let [r ((:_init f f) x)]
+;;      (if (empty? fs) {:_result r :_init (:_init acc r)}
+;;         (if (nil? (:_init f)) (recur acc r fs) (recur {:_init x} r fs))))
+;;     )
+;;   )
+
+
+
+;; (func-bind (func-bind 5
+;;                       {:i identity :_result identity}
+;;                       {:sqr sqr}
+;;                       sqr
+;;                       sqr
+;;                       {:sqr1 sqr})
+;;            :i)
+;;            sqr)
+
+(def insdata (insert-data test-spec1))
+
+(do
+  (def s (=>> (=>> (=> test-spec1 insert-data
+                       (>>= :Patient) :pt-1 :body #(json/parse-string % true) (>>= :id-1 :id))
+                   :Patient :pt-2 :body #(json/parse-string % true) (>>= :id-2 :id))
+              :Patient :pt-3 :body #(json/parse-string % true) (>>= :id-3 :id)))
+
+  (list (:id-1 s) (:id-2 s) (:id-3 s))
+
+  (run-cases insdata test-spec1)
+)
+
+;; (defn resolve-first [s]
+;;   (let [[f & args] (str/split s #" ")
+;;         rf (resolve (symbol f))]
+;;     #((partial rf rest) %&)
+;;     )
+;;   )
+
+;; (>  2 3)
+;; (apply (read-string "> 2") 1) 
+
+;; ((resolve-first ">" 2) 1)
+
+
