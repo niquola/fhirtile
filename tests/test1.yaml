@@ -1,0 +1,45 @@
+id: simple
+desc: 'Basic insert-query tests'
+fhir: '4.0.0'
+base-url: 'http://localhost:8765/'
+
+data:
+    Patient:
+      pt-1:
+        name: [{family: 'Doe'}]
+      pt-2:
+        name: [{family: 'John'}]
+      pt-3:
+        name: [{family: 'Ivan'}]
+
+cases:
+  count-correct:
+    method: get
+    url: 'Patient'
+    asserts:
+      as-1:
+         - _result: '#(= (count %) 3)'
+         - _result: '#(= (empty? %) false)'
+      as-2:
+         - _result: '#(> (count %) 2)'
+         - _result: '#(< (count %) 4)'
+  names-correct:
+    method: get
+    url: 'Patient'
+    id: $pt-1
+    asserts:
+      as-5:
+       - _result: '#(= (map? %) true)'
+       - _result:
+             name: [{family: 'Doe'}]
+      as-7:
+       _result:
+          name: '#(= (count %) 1)'
+      as-8:
+       _result:
+          name:
+             - family: 'Doe'
+      as-9:
+       _result:
+          name:
+             - family: '#(string? %)'
