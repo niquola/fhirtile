@@ -1,9 +1,11 @@
-(ns core
+(ns fhir-tests-suite-runner.core
   (:require [clj-http.lite.client :as http]
             [cheshire.core :as json]
             [clojure.string :as str]
             [clj-yaml.core :as yaml]
-            [matcho.core :refer :all :as matcho])
+            [matcho.core :refer :all :as matcho :exclude [assert]]
+            [clojure.test :only [is] :as test]
+            [clojure.set :as set])
   (:import [java.util.concurrent Executors TimeUnit ScheduledThreadPoolExecutor])
   (:gen-class))
 
@@ -135,7 +137,7 @@
 
 ;; prepare empty environment
 
-(comment not-implemented)
+(comment :not-implemented)
 
 ;; clear current database
 
@@ -175,7 +177,8 @@
 
   )
 
-(#_comment do
+
+(comment
 
   (get-entries "http://localhost:8765/Patient?_count=10000")
 
@@ -206,17 +209,22 @@
 ;; prepare modeling environment, insert data
 
 (defn insert-data [spec]
-  (let [dt (:data spec)
-        burl (:base-url spec)]
+  (let [{:keys [data base-url]} spec]
     (map-assoc (fn [t] 
-                 (let [entries (get dt t)] ;; entries of this type
+                 (let [entries (get data t) ;; entries of this type
+                       _ (println "Clearing database in" (name t) "...")
+                       url (str base-url "/" (name t))
+                       _ (clear-entries-url  url)
+                       _ (assert (every? true? (load-matching-test {:command get-entries
+                                                                    :args [url]
+                                                                    :asserts-match [empty?]}))
+                                 "Error: DB is not cleared")]
+                   (println "Inserting database in" (name t) "...")
                    (map-assoc (fn [eid]
                                 (let [bdstr
                                       (json/generate-string (merge {:resourceType t} (get entries eid)))]
-                                  (http/post (str burl "/" (name t))
-                                             {:headers {"Content-Type" "application/json; charset=utf-8"}
-                                              :body bdstr}))) {} (keys entries))
-                   )) {} (keys dt))
+                                  (http/post url {:headers {"Content-Type" "application/json; charset=utf-8"}
+                                                  :body bdstr}))) {} (keys entries)))) {} (keys data))
     )
   )
 
@@ -262,7 +270,6 @@
                        {:keys [method url asserts id] :or {id ""}} case
                        caseid (if (str/starts-with? id "$")
                                 (:_result (=> ctx
-
                                               (keyword url)
                                               (keyword (subs id 1))
                                               :body
@@ -270,7 +277,7 @@
                                               :id)) id)]
                    (map-assoc (fn [k] (let [a (get asserts k)]
                                         (load-matching-test
-                                         {:command (resolve (symbol (str "http/" method)))
+                                         {:command (ns-resolve 'fhir-tests-suite-runner.core (symbol (str "http/" method)))
                                           :args [(str base-url "/" url "/" (str caseid))]
                                           :process get-entry'
                                           :asserts-match (flatten [(get-matcher a)])}))) {} (keys asserts))
@@ -278,17 +285,75 @@
     ))
 
 
-(comment
 
-  (clear-entries-url  "http://localhost:8765/Patient/")
 
-  (load-matching-test {:command get-entries
-                       :args ["http://localhost:8765/Patient/"]
-                       :asserts-match [sequential? empty?]})
-
-  (def test1 (slurp "/Users/andruiman/devel/fhir-tests-suite-runner/tests/test1.yaml"))
-  (def test-spec1 (yaml/parse-string test1 :keywords true))
-  (def insdata (insert-data test-spec1))
-  (run-cases test-spec1 insdata)
-
+(defn final-vals [m]
+  (if (map? m)
+    (final-vals (vals m))
+    (if (sequential? m)
+      (flatten (mapv final-vals m))
+      m))
   )
+
+
+(final-vals {:a :A :b {:bb :BB :cc {:ccc :CCC :ddd :DDD}}})
+
+
+(defn -main [ & args]
+  (doseq [tfname args]
+    (let [
+          _ (println "Processing file: " tfname)
+
+          ;; _ (print "Clearing database...")
+          ;; _ (clear-entries-url  "http://localhost:8765/Patient/")
+
+          ;; _ (assert (every? true? (load-matching-test {:command get-entries
+          ;;                                               :args ["http://localhost:8765/Patient/"]
+          ;;                                               :asserts-match [empty?]})) "Error: DB is not cleared")
+
+          ;; _ (println "done")
+
+          ;; ;; change to real path
+          ;; test1 (slurp "/Users/andruiman/devel/fhir-tests-suite-runner/tests/test1.yaml")
+
+          _ (print "Reading and parsing file with test cases...")
+
+
+          test1 (try (slurp tfname)
+                     (catch Exception _
+                       nil))
+          _ (assert (some? test1) "Error: Test file is not read")
+
+          test-spec1 (try (yaml/parse-string test1 :keywords true)
+                          (catch Exception _
+                            nil))
+          _ (assert (some? test-spec1) "Error: Test data is nil")
+          _ (println "done")
+          ;; _ (println test-spec1)
+
+          _ (println "Inserting modeling environment into DB...")
+          insdata (insert-data test-spec1)
+          _ (assert (some? insdata) "Error: Inserted data retur is nil")
+          _ (println "done")
+          ;; _ (println insdata)
+
+
+          _ (println "Running test cases...")
+          tested (run-cases test-spec1 insdata)
+          _ (println "The result is: " tested)
+
+          _ (cond
+              (some false? (final-vals tested)) (println "Some assert failed")
+              :else (println "All asserts held")
+              )
+
+          _(println "done")]
+
+      ))
+  )
+
+#_(-main "/Users/andruiman/devel/fhir-tests-suite-runner/tests/test1.yaml"
+         "/Users/andruiman/devel/fhir-tests-suite-runner/tests/test2.yaml")
+
+
+

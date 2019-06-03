@@ -23,3 +23,9 @@ push: docker
 
 deploy:
 	cat deploy.tpl.yaml | envtpl  | kubectl apply -f -
+
+run:
+	java -jar ./target/fhir-ts-1.0.0-standalone.jar $(case-file)
+
+run-dir:
+	ls -d $(dir)/* | xargs java -jar ./target/fhir-ts-1.0.0-standalone.jar

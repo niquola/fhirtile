@@ -2,6 +2,7 @@
  :extra-paths ["resources"]
  :jvm-opts []
  :deps {org.clojure/clojure               {:mvn/version "1.10.0"}
+        org.clojure/clojure-contrib       {:mvn/version "1.2.0"}
         org.martinklepsch/clj-http-lite   {:mvn/version "0.4.1"}
         cheshire                          {:mvn/version "5.6.3"}
         clj-commons/clj-yaml           {:mvn/version "0.7.0"}
@@ -32,7 +33,7 @@
             :extra-deps {cambada {:git/url "https://github.com/HealthSamurai/cambada"
                                   :sha     "a8ccf922e516e3249e96ae63dadd91d5f01e83f5"}}
             :main-opts  ["-m" "cambada.uberjar"
-                         "--main" "core"
+                         "-m" "fhir_tests_suite_runner.core" 
                          "--app-group-id" "aidbox" 
-                         "--app-artifact-id" "crm"
+                         "--app-artifact-id" "fhir-ts"
                          "--app-version" "1.0.0"]}}}
