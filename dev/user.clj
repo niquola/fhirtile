@@ -1,7 +1,5 @@
 (ns user (:require [cider-nrepl.main]))
 
-
-
 (defn -main [& args]
   (-> (Thread/currentThread)
       (.setName "cider"))
